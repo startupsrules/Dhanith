@@ -1,9 +1,9 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from flask import Flask, jsonify
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-app = FastAPI()
+app = Flask(__name__)
 
 SCAN_CLAUSE = """( {cash} (
     monthly close > monthly upper bollinger band( 20 , 1.5 )
@@ -19,20 +19,24 @@ SCAN_CLAUSE = """( {cash} (
 def fetch_chartink_results(scan_clause: str):
     with requests.Session() as s:
         home_resp = s.get("https://chartink.com/screener")
+        home_resp.raise_for_status()
         soup = BeautifulSoup(home_resp.text, "lxml")
         meta = soup.find("meta", {"name": "csrf-token"})
         csrf_token = meta["content"] if meta else s.cookies.get("XSRF-TOKEN")
-        headers = {"x-requested-with": "XMLHttpRequest","x-csrf-token": csrf_token}
+        headers = {"x-requested-with": "XMLHttpRequest", "x-csrf-token": csrf_token}
         payload = {"scan_clause": scan_clause}
-        resp = s.post("https://chartink.com/screener/process",
-                      headers=headers, data=payload)
+        resp = s.post("https://chartink.com/screener/process", headers=headers, data=payload)
         resp.raise_for_status()
         return resp.json().get("data", [])
 
-class ScanClause(BaseModel):
-    scan_clause: str = SCAN_CLAUSE
+@app.route("/scan", methods=["GET"])
+def scan():
+    try:
+        results = fetch_chartink_results(SCAN_CLAUSE)
+        stocks = [{"nsecode": s["nsecode"], "name": s["name"]} for s in results]
+        return jsonify({"count": len(results), "stocks": stocks})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
-@app.post("/scan")
-def run_scan(payload: ScanClause):
-    results = fetch_chartink_results(payload.scan_clause)
-    return {"count": len(results), "results": results}
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
